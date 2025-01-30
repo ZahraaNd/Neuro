@@ -1,1 +1,3 @@
-gggg
+This repository is for my work on simulating neuronal networks. I use Hodgkin-Huxley equations to model each neuron, with currents being: Synaptic current, leak current, Potassium current, Sodium current, m current. The differential equations for the membrane potential and the activation functions are solved by 4th-order Runge-Kutta integration. Learning is implemented through firing-rate-dependent STDP, Synaptic Time-Dependent Plasticity. The network is composed of excitatory and inhibitory neurons. The netwrok and its connection are implemented using 'networkx' package. The functions were compiled with the jit decorator from 'numba' package for shorter runtime. 
+
+This work is part of a project that's being done for my PhD.
