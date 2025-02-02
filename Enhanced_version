@@ -1,0 +1,772 @@
+#%%
+
+import copy
+import matplotlib.pyplot as plt
+import numpy as np
+import networkx as nx
+import random
+import numba as nb # used to compile AMD and FCM calculations
+import time
+import imageio
+import matplotlib as mpl
+import os
+# end is 126. start is 142
+anchor = 126
+
+# turn features on or off
+stdp_on = 0
+syn_on = 1
+noise_on = 1
+keep_dc_high = 0
+adaptation_on = 0
+static = 1
+end_at_bound = 0
+timed_end = 1
+
+#run_options
+nb_of_runs = 2
+path_length = 30 #changed
+low_inh_length = 1
+high_inh_length = 0
+alpha = 0.000004
+
+# create network
+net_dict = {
+'N' : 240, #0
+'n_exc' : 210, #1
+'n_inh' : 30, #2
+
+'p_inh_to_exc' : 1, #3
+'p_inh_to_inh' : 1, #4
+}
+
+#turn to array
+net_params = np.fromiter(net_dict.values(), dtype=float)
+
+# Model Parameters
+run_dict = {
+
+'N' : 240, #0 TOTAL NB OF NEURONS
+
+#TIME PARAMS
+'h' : 0.05, #1
+'T' : 21000, #2 Remember to change it in the numerator of n_steps too, parameter nb 5!!
+'t_syn' : 100, #3
+'t_skip' : 50, #4
+'n_steps' : int(21000 / 0.05), #5
+
+#HH MODEL PARAMS
+'v_exc' : 0, #6
+'v_inh' : -75, #7
+
+'C_m' : 1, #8
+'g_K' : 3, #9
+'g_Na' : 24, #10
+'g_L' : 0.02, #11
+
+'V_k' : -90, #12
+'V_Na' : 55, #13
+'V_L' : -60, #14
+
+'tau_f' : 0.5, #15
+'tau_s' : 50, #16 double check with michal's
+
+#STDP PARAMETERS: A: AMPLITUDE, AND TAU'S
+'A_plus' : 0.6,#0.01, #17
+'A_minus' : 0.05,#0.01, #18
+'tau_plus' : 15, #19
+'tau_minus' : 100, #20
+
+#WEIGHTS
+'w_inh_exc' : 0.1,#0.1, #21 inhibitory neurons
+'w_exc_exc' : 2.5, #22
+'w_inh_inh' : 0.2,#0.6, #23
+'w_exc_inh' : 0.1,#0.5, #24
+
+#CURRENTS
+'I_exc' : 0, #25
+'I_inh' : 0.5, #26
+'I_it' : 0, #4, #27
+'I_bias' : 2, #28
+
+#ACH
+'g_Ks_exc' : 0, #29
+'g_Ks_inh' : 0, #30
+
+#NOISE PARAMS
+'noise_amp' :100, #31
+'noise_freq' : 0.0004, #32 freq in 1/ms x1000 to Hz
+
+#NETWORK STRUCTURE
+'n_exc' : 210, #33
+'n_inh' : 30, #34
+
+#TEMPORAL STEP SIZE
+'pulse_time' : 3000, #35 150 ms in timesteps!
+
+#STDP MAS WEIGHTS
+'w_max_exc' : 8, #36
+'w_max_inh' : 8, #37
+
+'I_stim' : 2, #38
+'gks_var': 0 #39
+}
+
+Re = np.zeros((int(run_dict['N']),int(run_dict['N'])))
+Rs = np.zeros((int(run_dict['N']),int(run_dict['N'])))
+Rf = np.zeros((int(run_dict['N']),int(run_dict['N'])))
+
+Re[:int(run_dict['n_exc']), :int(run_dict['n_exc'])] = 0.15
+Re[:int(run_dict['n_exc']), int(run_dict['n_exc']):int(run_dict['N'])] = 0.08
+Re[int(run_dict['n_exc']):int(run_dict['N']), int(run_dict['n_exc']):int(run_dict['N'])] = 0.15
+Rs[int(run_dict['n_exc']):int(run_dict['N']), :int(run_dict['n_exc'])] = 0.05
+
+run_params = np.fromiter(run_dict.values(), dtype=float)
+
+def create_net(net_params):
+    # Create a 10x10 2D square DiGraph
+    G = nx.DiGraph()
+
+    nodes = [(i,j) for i in range(23) for j in range(23)]
+    sorted_tuples = sorted(nodes, key=lambda x: x[0] + x[1])
+
+    # Add nodes to the DiGraph
+    for i in range(len(sorted_tuples)):
+        G.add_node(sorted_tuples[i], type='excitatory')
+
+    # Create horizontal and vertical edges
+    for i in range(23):
+        for j in range(23):
+            if i > 0:
+                G.add_edge((i, j), (i - 1, j))  # Down
+                G.add_edge((i - 1, j), (i, j))
+            if j > 0:
+                G.add_edge((i, j), (i, j - 1))  # Left
+                G.add_edge((i, j - 1), (i, j))
+
+    # Create a list of nodes to remove (below the diagonal)
+    nodes_to_remove = [node for node in G.nodes() if - node[0] + 22 < node[1]]
+    G.remove_nodes_from(nodes_to_remove)
+
+    # Create a dictionary to map node positions to node numbers
+    nodes_to_skip = [(1,1), (3, 1), (4, 1), (6, 1), (8, 1), (9, 1), (11, 1), (13, 1), (14, 1), (16, 1), (18, 1), (19, 1), (1, 3), (3, 3), (5, 3), (6, 3), (8,3), (10, 3), (11, 3), (13, 3), (15, 3), (17, 3), (1, 5), (2, 5), (4, 5), (5, 5), (7, 5), (8, 5), (10, 5), (13, 5), (15, 5), (1, 7), (3, 7), (4, 7), (6, 7), (7,7), (9, 7), (11, 7), (13, 7), (1, 9), (2, 9), (4, 9), (6, 9), (8, 9), (10, 9), (12, 9), (1, 11), (3, 11), (5, 11),(7, 11), (8, 11), (10, 11),(1, 13), (2, 13), (4, 13), (6, 13), (8, 13), (1, 15), (3, 15), (4, 15), (6, 15), (1, 17), (3, 17), (4, 17), (2, 19), (3, 19)]
+    G.remove_nodes_from(nodes_to_skip)
+
+    node_labels = {node: i for i, node in enumerate(G.nodes())}
+
+    for node in nodes_to_skip:
+        i = node[0]
+        j = node[1]
+        edges_to_remove = [((i,j),(i+1,j)), ((i-1,j),(i,j)), ((i,j),(i,j+1)), ((i,j-1),(i,j))]
+        G.remove_edges_from(edges_to_remove)
+
+    # inhibitory network
+    for i in range(int(net_params[1]), int(net_params[0])):
+        G.add_node(i, type='inhibitory')
+
+    # Make inhibitory connections
+    # Define the percentage of inhibitory neurons that project to excitatory neurons
+    p_inh_to_exc = net_params[3]
+    # Define the percentage of inhibitory neurons that project to inhibitory neurons
+    p_inh_to_inh = net_params[4]
+
+    inhibitory_neurons = list(G.nodes())[int(net_params[1]):int(net_params[0])]
+    excitatory_neurons = list(G.nodes())[:int(net_params[1])]
+
+    for node in G.nodes():
+
+        # variable 4: percentage of excitation, currently set to two connections
+        if G.nodes[node]['type'] == 'excitatory':
+
+            proj_exc_inh_neurons = random.sample(inhibitory_neurons, 30)
+            # Add edges from the excitatory neuron to the selected inhibitory neurons
+            for j in proj_exc_inh_neurons:
+                G.add_edge(node, j)
+
+        elif G.nodes[node]['type'] == 'inhibitory':
+
+            # Select a random subset of excitatory neurons to project to
+            proj_inh_exc_neurons = random.sample(excitatory_neurons, round(len(excitatory_neurons) * p_inh_to_exc))
+            proj_inh_inh_neurons = random.sample(inhibitory_neurons, round(len(inhibitory_neurons) * p_inh_to_inh))
+            # Add edges from the inhibitory neuron to the selected inhibitory neurons
+            for j in proj_inh_inh_neurons:
+                if node != j:
+                    G.add_edge(node, j)
+                    # G.add_edge(j,i)
+
+            # Add edges from the inhibitory neuron to the selected excitatory neurons
+            for j in proj_inh_exc_neurons:
+                G.add_edge(node, j)
+                # G.add_edge(j,i)
+
+    node_labels = {node: i for i, node in enumerate(list(G.nodes())[:int(net_params[1])])}
+
+    # Adjacency matrix
+    A = nx.to_numpy_array(G)
+
+    # Specify the node of interest and number of steps
+    #node_of_interest = (11,11)
+    #steps = 10
+
+    #print(nx.single_source_shortest_path_length(G, node_of_interest).items())
+    # Get nodes that are exactly 10 steps away
+    #result = [node for node, distance in nx.single_source_shortest_path_length(G, node_of_interest).items() if
+    #          distance == steps]
+
+    return A, node_labels
+
+@nb.jit(nopython=True)
+def calculate_frequency(spike_times):
+    """Calculate firing frequency from spike times."""
+    last_idx = -1
+    second_last_idx = -1
+
+    for l, value in enumerate(~np.isnan(spike_times)):
+        if value:
+            second_last_idx = last_idx
+            last_idx = l
+
+    if last_idx != -1 and second_last_idx != -1:
+        return float(1000.0 / (last_idx - second_last_idx))
+    return 0.0
+
+
+@nb.jit(nopython=True)
+def calculate_positive_weight_change(dt, run_params, current_weight):
+    """Calculate positive weight change based on STDP rule."""
+    return (run_params[17] * np.exp((-dt * 0.05) / run_params[19])) * \
+        (1 - current_weight / run_params[36])
+
+
+@nb.jit(nopython=True)
+def calculate_negative_weight_change(dt, run_params):
+    """Calculate negative weight change based on STDP rule."""
+    return -run_params[18] * np.exp((-dt * 0.05) / run_params[20])
+
+
+@nb.jit(nopython=True)
+def update_weights_by_frequency(w, i, j, f, dw_p, dw_n, run_params):
+    """Update weights based on frequency ranges."""
+    max_weight = run_params[36]
+
+    if f >= 6:  # Potentiation for both directions
+        w[j, i] = min(w[j, i] + dw_p, max_weight)
+        w[i, j] = min(w[i, j] + dw_p, max_weight)
+
+    elif 4.8 < f < 6:  # Bidirectional changes
+        w[j, i] = min(w[j, i] + dw_p, max_weight)
+        w[i, j] = max(w[i, j] + dw_n, 0)
+
+    elif 0 < f <= 4.8:  # Depression for both directions
+        w[i, j] = max(w[i, j] + dw_n, 0)
+        w[j, i] = max(w[j, i] + dw_n, 0)
+
+    return w
+
+@nb.jit(nb.float64[:, :](nb.float64[:, :], nb.float64[:, :], nb.float64[:, :],
+                         nb.float64[:], nb.int64, nb.int64, nb.float64[:, :]), nopython=True)
+def stdp(w, A, t_events, run_params, i, n, freq):
+    """
+    Implements STDP learning rule for synaptic weight updates.
+
+    Args:
+        w: Weight matrix
+        A: Adjacency matrix
+        t_events: Spike timing events
+        run_params: Simulation parameters
+        i: Current neuron index
+        n: Current time step
+        freq: Frequency array
+    """
+    # Calculate firing frequency
+    f = calculate_frequency(t_events[i])
+
+    # Get connected neurons (presynaptic)
+    connected_neurons = np.where(A[:, i] == 1)[0]
+
+    # Only process excitatory neurons
+    exc_neurons = connected_neurons[connected_neurons < int(run_params[33])]
+
+    for j in exc_neurons:
+        # Get valid spike times for presynaptic neuron
+        pre_spikes = t_events[j][~np.isnan(t_events[j])]
+        if len(pre_spikes) == 0:
+            continue
+
+        # Calculate time difference
+        dt = n - pre_spikes[-1]  # pre - post timing
+
+        # Calculate weight changes
+        dw_p = calculate_positive_weight_change(dt, run_params, w[i, j])
+        dw_n = calculate_negative_weight_change(dt, run_params)
+
+        # Update weights based on frequency ranges
+        w = update_weights_by_frequency(w, i, j, f, dw_p, dw_n, run_params)
+
+    return w
+
+
+@nb.jit(nb.float64[:, :](nb.float64[:, :], nb.float64[:], nb.float64[:], nb.float64[:], nb.float64[:], nb.float64[:]),
+        nopython=True)
+def ode_sys(y, I_syn, I_noise, I_ext, g_Ks, run_params):
+    n_neurons = int(run_params[0])
+    dydt = np.empty((n_neurons, 4))  # faster than zeros
+
+    # Pre-compute common expressions
+    V = y[:, 3]
+    exp_term1 = 1.0 / (1.0 + np.exp((V + 53.0) / 7.0))
+    exp_term2 = 1.0 / (1.0 + np.exp((V + 40.5) / 6.0))
+    exp_term3 = 1.0 / (1.0 + np.exp((-V - 30.0) / 10.0))
+    exp_term4 = 1.0 / (1.0 + np.exp((V + 27.0) / 15.0))
+    exp_term5 = 1.0 / (1.0 + np.exp((-V - 39.0) / 5.0))
+    exp_term6 = 1.0 / (1.0 + np.exp((-V - 30.0) / 9.5))
+
+    # First equation
+    dydt[:, 0] = (exp_term1 - y[:, 0]) / (0.37 + 2.78 * exp_term2)
+
+    # Second equation
+    dydt[:, 1] = (exp_term3 - y[:, 1]) / (0.37 + 1.85 * exp_term4)
+
+    # Third equation
+    dydt[:, 2] = (exp_term5 - y[:, 2]) / 75.0
+
+    # Fourth equation - pre-compute powers
+    exp_term6_cubed = exp_term6 * exp_term6 * exp_term6
+    y1_fourth = y[:, 1] * y[:, 1] * y[:, 1] * y[:, 1]
+
+    # Voltage differences
+    V_diff13 = V - run_params[13]
+    V_diff12 = V - run_params[12]
+    V_diff14 = V - run_params[14]
+
+    # Final equation
+    dydt[:, 3] = (1.0 / run_params[8]) * (
+            - run_params[10] * exp_term6_cubed * y[:, 0] * V_diff13
+            - run_params[9] * y1_fourth * V_diff12
+            - g_Ks * y[:, 2] * V_diff12
+            - run_params[11] * V_diff14
+            + I_ext - I_syn + I_noise
+    )
+
+    return dydt
+
+
+@nb.jit(nb.types.Tuple((nb.float64[:,:], nb.float64[:,:], nb.float64[:,:], nb.float64[:,:]))(nb.float64[:,:], nb.float64[:,:], nb.float64[:,:], nb.float64, nb.float64[:], nb.float64[:]), nopython = True)
+def I_syn_calc(w, A, t_events, n, y, run_params):
+
+    ef_last_spike = np.zeros((int(run_params[0]), int(run_params[0])))
+    es_last_spike = np.zeros((int(run_params[0]), int(run_params[0])))
+    post_V = np.ones((int(run_params[0]), int(run_params[0])))
+    rp = np.append(np.full((int(run_params[33]), 1), run_params[6]), np.full((int(run_params[34]), 1), run_params[7]))
+
+    for i in range(int(run_params[0])):
+        train = t_events[i][(np.isnan(t_events[i]) == False)]
+
+        ef = np.exp(-(n - train[-1]) * run_params[1] / run_params[15]) if train.size > 0 else 0.0
+        es = np.exp(-(n - train[-1]) * run_params[1] / run_params[16]) if train.size > 0 and i >= int(run_params[33]) else 0.0
+
+        for j in range(int(run_params[0])):
+            ef_last_spike[i,j] = ef
+            es_last_spike[i,j] = es
+
+        post_V[i] = y - rp[i]
+
+    I_syn = A * w * post_V * ((Re * ef_last_spike) + (Rs * es_last_spike))
+
+    return I_syn, post_V, ef_last_spike, es_last_spike
+
+
+A, node_labels = create_net(net_params)
+run_params = np.fromiter(run_dict.values(), dtype=float)
+
+c = ['b' for i in range(210)]+['r' for i in range(30)]
+
+w0 = np.ones((int(run_params[0]), int(run_params[0])))
+w0[0:int(run_params[33]), 0:int(run_params[33])] = run_params[22]
+w0[int(run_params[33]):int(run_params[0]), 0:int(run_params[33])] = run_params[21]
+w0[0:int(run_params[33]), int(run_params[33]):int(run_params[0])] = run_params[24]
+w0[int(run_params[33]):int(run_params[0]), int(run_params[33]):int(run_params[0])] = run_params[23]
+w0 = w0 * A
+
+# used for different modalities of using the function
+#pre_path = np.array([198, 178, 166, 148, 167, 149, 136, 123, 109, 124, 137, 125, 110, 126, 111, 99, 87, 77, 67, 57, 48])
+pre_path = np.array([142, 158, 143 ,129, 115, 101, 116, 102, 90, 103, 91, 80, 92, 81, 72, 62, 52, 63, 73, 83, 95, 107, 122, 108, 96, 109, 124, 137, 125, 110, 126])
+
+# select path
+p = pre_path[0: int(path_length)+1]
+if low_inh_length !=0:
+    p = np.concatenate((pre_path[0: int(path_length)], np.full((low_inh_length, ), pre_path[int(path_length)])))
+if high_inh_length !=0:
+    p = np.concatenate((pre_path[0: int(path_length)], np.full((high_inh_length, ), pre_path[int(path_length)])))
+
+# by hand strengthen path
+for i in range(len(p) - 1):
+    w0[p[i], p[i + 1]] = 7.5
+    w0[p[i + 1], p[i]] = 7.5
+
+p2 = np.full(p.shape, anchor)
+
+force_path = 1
+specified_start = 0 # can't be on with a forced path, includes choosing the start point only
+
+path_length = 0
+low_inh_length = 4
+high_inh_length = 0
+
+@nb.jit(nopython=True)
+def create_noise(run_params):
+    noise = np.zeros((int(run_params[0]), int(run_params[5])))
+
+    # noise of the specified frequency for each neuron
+    for i in range(int(run_params[0])):
+        for n in range(int(run_params[5])):
+            rand_num = random.random()
+            # Check if the neuron receives input
+            if rand_num < run_params[32] and noise_on == 1:
+                for j in range(n, (n + int(1 / run_params[1])) % run_params[5]):
+                    noise[i, j] = run_params[31]
+    return noise
+
+@nb.jit(nopython=True)
+def initialize_arrays(run_params):
+    """Initialize all arrays needed for simulation."""
+    n_neurons = int(run_params[0])
+    n_timesteps = int(run_params[5])
+    n_exc = int(run_params[33])
+    n_inh = int(run_params[34])
+
+    # Initialize main arrays
+    y = np.zeros((n_timesteps, n_neurons, 4))
+    frequency = np.zeros((210, n_timesteps))
+    t_events = np.full((n_neurons, 1), np.nan)
+
+    # Initialize currents and conductances
+    I_ext = np.append(np.full((n_exc, 1), run_params[25]),
+                      np.full((n_inh, 1), run_params[26]))
+    g_Ks = np.append(np.full((n_exc, 1), run_params[29]),
+                     np.full((n_inh, 1), run_params[30]))
+
+    return y, frequency, t_events, I_ext, g_Ks
+
+
+@nb.jit(nopython=True)
+def set_initial_conditions(y, run_params):
+    """Set initial conditions for neurons."""
+    for i in range(int(run_params[0])):
+        y[0, i, 0] = np.round(random.uniform(0.45, 0.9), 2)
+        y[0, i, 1] = np.round(random.uniform(0.3, 0.6), 2)
+        y[0, i, 2] = np.round(random.uniform(0.03, 0.07), 2)
+        y[0, i, 3] = np.round(random.uniform(-65, -80), 2)
+
+
+@nb.jit(nopython=True)
+def compute_rk4_step(y_n, I_syn, I_syn_s, noise_n, I_ext, g_Ks, run_params):
+    """Compute one RK4 integration step."""
+    dt = run_params[1]
+
+    # Pre-compute common terms
+    k1 = dt * ode_sys(y_n, I_syn_s[0], noise_n, I_ext, g_Ks, run_params)
+    y_temp = y_n + k1 / 2.0
+    k2 = dt * ode_sys(y_temp, I_syn_s[1], noise_n, I_ext, g_Ks, run_params)
+    y_temp = y_n + k2 / 2.0
+    k3 = dt * ode_sys(y_temp, I_syn_s[2], noise_n, I_ext, g_Ks, run_params)
+    y_temp = y_n + k3
+    k4 = dt * ode_sys(y_temp, I_syn_s[3], noise_n, I_ext, g_Ks, run_params)
+
+    return k1, k2, k3, k4
+
+
+@nb.jit(nopython=True)
+def update_synaptic_currents(w, A, t_events, n, y_n, k1, k2, k3, run_params):
+    """Update synaptic currents for all RK4 stages."""
+    n_neurons = int(run_params[0])
+    I_syn = np.zeros((4, n_neurons, n_neurons))
+    I_syn_s = np.zeros((4, n_neurons))
+
+    # Compute currents for each RK4 stage
+    I_syn[0] = I_syn_calc(w, A, t_events, n, y_n[:, 3], run_params)[0]
+    I_syn[1] = I_syn_calc(w, A, t_events, n + 0.5, y_n[:, 3] + k1[:, 3] / 2.0, run_params)[0]
+    I_syn[2] = I_syn_calc(w, A, t_events, n + 0.5, y_n[:, 3] + k2[:, 3] / 2.0, run_params)[0]
+    I_syn[3] = I_syn_calc(w, A, t_events, n + 1, y_n[:, 3] + k3[:, 3], run_params)[0]
+
+    # Compute sums
+    for i in range(4):
+        I_syn_s[i] = np.sum(I_syn[i], axis=0)
+
+    return I_syn, I_syn_s
+
+
+@nb.jit(nopython=True)
+def check_spikes(y_n, y_next, n, t_events, w, A, run_params, frequency):
+    """Check for spikes and update STDP if necessary."""
+    n_neurons = int(run_params[0])
+    a = np.full((n_neurons, 1), np.nan)
+
+    for i in range(n_neurons):
+        if y_n[i, 3] < 5.0 and y_next[i, 3] > 5.0:
+            a[i, 0] = n
+            if (stdp_on == 1 and
+                    n > int((run_params[3] + run_params[4]) / run_params[1]) and
+                    i < int(run_params[33])):
+                w = stdp(w, A, t_events, run_params, i, n, frequency)
+
+    return np.column_stack((t_events, a)), w
+
+@nb.jit(nopython=True)
+def handle_forced_path(n, record_interval, path_length, low_inh_length, high_inh_length):
+    """Handle forced path conditions and determine if simulation should break."""
+    if low_inh_length != 0 and n // record_interval >= path_length:
+        if n // record_interval == path_length + low_inh_length:
+            return True
+    elif high_inh_length != 0 and record_interval >= path_length:
+        if n // record_interval == path_length + high_inh_length:
+            return True
+    elif n // record_interval == path_length:
+        return True
+    return False
+
+
+@nb.jit(nopython=True)
+def update_ei_balance(I_syn, Ec, Ic, n_neurons, run_params):
+    """Update excitatory/inhibitory balance calculations."""
+    n_exc = int(run_params[33])
+    for i in range(4):
+        Ec += np.sum(I_syn[i][:n_exc, :n_exc])
+        Ic += np.sum(I_syn[i][n_exc:n_neurons, :n_exc])
+    return Ec, Ic
+
+@nb.jit(nb.types.Tuple((nb.float64[:, :], nb.float64, nb.float64[:, :], nb.float64[:], nb.float64[:],
+                        nb.float64[:, :, :, :], nb.float64[:, :, :], nb.int32, nb.float64[:, :], nb.float64[:, :]))(
+    nb.float64[:, :], nb.int32, nb.int32, nb.float64[:], nb.int64,
+    nb.float64[:, :], nb.float64[:], nb.int32[:], nb.int32[:], nb.float64[:, :, :, :]),
+    nopython=True, fastmath=True)
+def solve_RK4(w, counter, reward_node, occupancy, start, A, run_params, stimh, prepath, w_ev):
+    """
+    Optimized RK4 solver for neural network simulation.
+    Uses pre-computed values and minimizes memory allocations.
+    """
+    print(f'run {counter}')
+
+    # Initialize all arrays at once
+    y, frequency, t_events, I_ext, g_Ks = initialize_arrays(run_params)
+
+    # Store frequently used parameters
+    n_timesteps = int(run_params[5])
+    n_neurons = int(run_params[0])
+    dt = run_params[1]
+    syn_start = int(run_params[3] / dt)
+    record_interval = int(run_params[35])
+
+    # Set initial conditions
+    set_initial_conditions(y, run_params)
+    w_ev[0] = w
+
+    # Initialize stimulus
+    stim = np.zeros(1)
+    if specified_start == 1:
+        stim[0] = int(start)
+    elif force_path == 1:
+        stim[0] = int(prepath[0])
+    else:
+        stim[0] = 198
+
+    # Initialize tracking variables
+    Ec = Ic = 0.0
+    I_edit = 0
+    I_stop = -40
+    stimulate = 1
+
+    # Get noise matrix
+    noise = create_noise(run_params)
+
+    # Pre-allocate arrays for RK4
+    k1 = np.zeros((n_neurons, 4))
+    k2 = np.zeros((n_neurons, 4))
+    k3 = np.zeros((n_neurons, 4))
+    k4 = np.zeros((n_neurons, 4))
+
+    # Main time stepping loop
+    for n in range(n_timesteps - 1):
+        # Initialize synaptic currents
+        I_syn = np.zeros((4, n_neurons, n_neurons))
+        I_syn_s = np.zeros((4, n_neurons))
+
+        # Update synaptic currents if past activation time
+        if n >= syn_start and syn_on:
+            I_syn, I_syn_s = update_synaptic_currents(w, A, t_events, n, y[n], k1, k2, k3, run_params)
+
+        # Record state at intervals
+        if n == record_interval:
+            w_ev[counter, 1] = w
+
+        if n % record_interval == 0 and n > int(run_params[3] * 20):
+            occupancy[int(stim[-1])] += 1
+            w_ev[counter, int(n / record_interval)] = w
+            print(f'step: {int(n / record_interval)}')
+
+            # Handle forced path conditions
+            if force_path == 1:
+                if handle_forced_path(n, record_interval, path_length, low_inh_length, high_inh_length):
+                    break
+                stim = np.append(stim, prepath[int(n // record_interval)])
+
+        # Update external current
+        I_ext[int(stim[-1])] = run_params[27] if stimulate == 1 else I_edit
+
+        # Compute RK4 step
+        k1, k2, k3, k4 = compute_rk4_step(y[n], I_syn, I_syn_s, noise[:, n], I_ext, g_Ks, run_params)
+
+        # Update solution
+        y[n + 1] = y[n] + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+
+        # Check for spikes and update STDP
+        t_events, w = check_spikes(y[n], y[n + 1], n, t_events, w, A, run_params, frequency)
+
+        # Update E/I balance
+        Ec, Ic = update_ei_balance(I_syn, Ec, Ic, n_neurons, run_params)
+
+    # Calculate final E/I balance
+    EI_b = abs(Ec / Ic) if Ic != 0 else 0
+
+    return t_events, EI_b, w, stim, occupancy, w_ev, y, reward_node, frequency, noise
+
+
+def prep(sol, run_params):
+
+    copi = [[] for i in range(len(sol))]
+    for i in range(len(sol)):
+        copi[i] = [x*0.05 for x in sol[i] if x != np.nan and x*0.05 > (run_params[3] + run_params[4])]
+
+    return copi
+
+
+# method 2
+import numpy as np
+def nan_to_zero(array):
+    # Create a copy of the array to avoid modifying the original
+    result = array.copy()
+    # Replace NaN values with 0
+    result[np.isnan(result)] = 0
+    return result
+
+
+def check_following_entries(array1, array2, series_length=20, window_size=20):
+    """
+    For each series of non-zero entries in array1, check if array2 has any non-zero entries
+    in the following window_size positions.
+
+    Parameters:
+    array1, array2: 2D numpy arrays with same number of rows
+    series_length: length of consecutive non-zero entries in array1 (default 20)
+    window_size: size of window to check in array2 (default 500)
+
+    Returns:
+    followed_count: number of series followed by non-zero entries
+    not_followed_count: number of series not followed by non-zero entries
+    """
+    if array1.shape[0] != array2.shape[0]:
+        raise ValueError("Arrays must have same number of rows")
+
+    followed_count = 0
+    not_followed_count = 0
+
+    for row in range(array1.shape[0]):
+        # Find starts of non-zero series in array1
+        row_data1 = array1[row]
+        row_data2 = array2[row]
+
+        # Find positions where non-zero values start
+        nonzero_positions = np.nonzero(row_data1)[0]
+
+        # Find starts of series
+        series_starts = []
+        if len(nonzero_positions) >= series_length:
+            for i in range(len(nonzero_positions) - series_length + 1):
+                if np.all(np.diff(nonzero_positions[i:i + series_length]) == 1):
+                    series_starts.append(nonzero_positions[i])
+
+        # Check window in array2 for each series start
+        for start_pos in series_starts:
+            # Define window end, considering array bounds
+            end_pos = min(start_pos + window_size, len(row_data2))
+
+            # Check if any non-zero values in window
+            if np.any(row_data2[start_pos:end_pos] != 0):
+                followed_count += 1
+            else:
+                not_followed_count += 1
+
+    return followed_count, not_followed_count
+
+#w_h = [5.5, 6.5, 7.5, 8.5]
+#w_l = [4.5, 3.5, 2.5, 1.5]
+gks = [0, 1.5]
+
+nb_of_runs = len(gks)
+nb_of_trials = len(gks)
+
+# prep high
+eih = [np.zeros(nb_of_runs) for j in range(nb_of_trials)]
+wh = [[[] for i in range(nb_of_runs)] for j in range(nb_of_trials)]
+solh = [[[] for i in range(nb_of_runs)] for j in range(nb_of_trials)]
+stimh = [[np.zeros(1, dtype=int) for i in range(nb_of_runs)] for j in range(nb_of_trials)]
+w_evh = np.zeros((nb_of_trials, nb_of_runs, len(p) + 1, int(run_params[0]), int(run_params[0])))
+occupancyh = np.zeros(run_dict['N'])
+start_pts = [195, 195, 195, 196, 196, 196, 197, 197, 197, 198, 198, 198, 199, 199, 199, 200, 200, 200, 201, 201, 201, 202, 202, 202, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10, 11, 12, 13, 14, 15,16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+reward_node = 0
+
+#initialization
+for j in range(nb_of_trials):
+    for i in range(nb_of_runs):
+        stimh[j][i][-1] = 198
+        wh[j][i] = w0
+
+for z in range(len(gks)):
+    run_params[29] = gks[z]# exc
+    for g in range(len(gks)):
+        run_params[30] = gks[g] # inh
+
+        w_new = w0
+        t_start = time.time()
+        # stimh[i-1][-1], this instead of start_pts[i] as argument to do back_to_back
+        solz = solve_RK4(w_new, g, reward_node, occupancyh, start_pts[g], A, run_params, p, p2, w_evh[z]) # p is where dc is changed, the actual path, p2 is what is followed during the run
+        solh[z][g], eih[z][g], wh[z][g], stimh[z][g], occupancyh, w_evh[z], vt, reward_node, f, noise = solz
+        t_end = time.time()
+        duration = t_end - t_start
+        print(f'run {g} duration: {int(duration // 3600):02d}:{int((duration % 3600) // 60):02d}:{int(duration % 60):02d}')
+
+        plt.eventplot(prep(np.array(solh[z][g])[np.array(
+            [142, 158, 143, 129, 115, 101, 116, 102, 90, 103, 91, 80, 92, 81, 72, 62, 52, 63, 73, 83, 95, 107, 122, 108,
+             96, 109, 124, 137, 125, 110, 126])], run_params))
+        plt.title(f'inh = {run_params[30]}, exc = {run_params[29]}')
+        plt.show()
+
+        followed, not_followed = check_following_entries(noise[:210, 3000:6001],
+                                                         nan_to_zero(solh[0][0][:210, 3000:6001]))
+        print(f"Number of noise-triggered spikes: {followed}")
+        print(f"Number of non-trigerring noise: {not_followed}")
+        print(f'Percentage of spike-triggering noise: {followed / (followed + not_followed)}')
+
+'''
+run_params[29] = 0.8# exc
+gks = [1.5]
+z = 0
+for g in range(len(gks)):
+    run_params[30] = 0 # inh
+
+    w_new = w0
+    t_start = time.time()
+    # stimh[i-1][-1], this instead of start_pts[i] as argument to do back_to_back
+    solz = solve_RK4(w_new, g, reward_node, occupancyh, start_pts[g], A, run_params, p, p2, w_evh[z]) # p is where dc is changed, the actual path, p2 is what is followed during the run
+    solh[z][g], eih[z][g], wh[z][g], stimh[z][g], occupancyh, w_evh[z], vt, reward_node, f = solz
+    t_end = time.time()
+    duration = t_end - t_start
+    print(f'run {g} duration: {int(duration // 3600):02d}:{int((duration % 3600) // 60):02d}:{int(duration % 60):02d}')
+
+    plt.eventplot(prep(solh[z][g], run_params), colors=c)
+    plt.title(f'high inh, run: {g}')
+    plt.show()
+
+    print('reached'+str(stimh[z][g][-1]))
+'''
+
