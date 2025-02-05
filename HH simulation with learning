@@ -609,7 +609,7 @@ def solve_RK4(w, counter, reward_node, occupancy, start, A, run_params, stimh, p
                 for j in range(n, (n + int(1 / run_params[1])) % run_params[5]):
                     noise[i, j] = run_params[31]
 
-    y = np.zeros((int(run_params[5]), int(run_params[0]), 4))
+    y = np.zeros((int(run_params[0]), 4))
     t_events = np.full((int(run_params[0]), 1), np.nan)
 
     k1 = np.zeros((int(run_params[0]), 4))
@@ -618,10 +618,10 @@ def solve_RK4(w, counter, reward_node, occupancy, start, A, run_params, stimh, p
 
     # variable 8: initial conditions of neurons
     for i in range(int(run_params[0])):
-        y[0, i, 0] = np.round(random.uniform(0.45, 0.9), 2)  # h0
-        y[0, i, 1] = np.round(random.uniform(0.3, 0.6), 2)  # n0
-        y[0, i, 2] = np.round(random.uniform(0.03, 0.07), 2)  # z0
-        y[0, i, 3] = np.round(random.uniform(-65, -80), 2)  # V0
+        y[i, 0] = np.round(random.uniform(0.45, 0.9), 2)  # h0
+        y[i, 1] = np.round(random.uniform(0.3, 0.6), 2)  # n0
+        y[i, 2] = np.round(random.uniform(0.03, 0.07), 2)  # z0
+        y[i, 3] = np.round(random.uniform(-65, -80), 2)  # V0
 
     dont_move = 0
     I_edit = 0
@@ -635,10 +635,10 @@ def solve_RK4(w, counter, reward_node, occupancy, start, A, run_params, stimh, p
 
         # w = w - alpha/w
         if n >= int(run_params[3] / run_params[1]) and syn_on == 1:
-            I_syn[0] = I_syn_calc(w, A, t_events, n, y[n, :, 3], run_params)[0]
-            I_syn[1] = I_syn_calc(w, A, t_events, n + 0.5, y[n, :, 3] + k1[:, 3] / 2.0, run_params)[0]
-            I_syn[2] = I_syn_calc(w, A, t_events, n + 0.5, y[n, :, 3] + k2[:, 3] / 2.0, run_params)[0]
-            I_syn[3] = I_syn_calc(w, A, t_events, n + 1, y[n, :, 3] + k3[:, 3], run_params)[0]
+            I_syn[0] = I_syn_calc(w, A, t_events, n, y[:, 3], run_params)[0]
+            I_syn[1] = I_syn_calc(w, A, t_events, n + 0.5, y[:, 3] + k1[:, 3] / 2.0, run_params)[0]
+            I_syn[2] = I_syn_calc(w, A, t_events, n + 0.5, y[:, 3] + k2[:, 3] / 2.0, run_params)[0]
+            I_syn[3] = I_syn_calc(w, A, t_events, n + 1, y[:, 3] + k3[:, 3], run_params)[0]
 
         if n == run_params[35]:
             w_ev[counter, 1] = w
@@ -688,17 +688,17 @@ def solve_RK4(w, counter, reward_node, occupancy, start, A, run_params, stimh, p
             I_syn_s[2] = np.sum(I_syn[2], axis=0)
             I_syn_s[3] = np.sum(I_syn[3], axis=0)
 
-        k1 = run_params[1] * ode_sys(y[n], I_syn_s[0], noise[:, n], I_ext, g_Ks, run_params)
-        k2 = run_params[1] * ode_sys(y[n] + k1 / 2.0, I_syn_s[1], noise[:, n], I_ext, g_Ks, run_params)
-        k3 = run_params[1] * ode_sys(y[n] + k2 / 2.0, I_syn_s[2], noise[:, n], I_ext, g_Ks, run_params)
-        k4 = run_params[1] * ode_sys(y[n] + k3, I_syn_s[3], noise[:, n], I_ext, g_Ks, run_params)
+        k1 = run_params[1] * ode_sys(y, I_syn_s[0], noise[:, n], I_ext, g_Ks, run_params)
+        k2 = run_params[1] * ode_sys(y + k1 / 2.0, I_syn_s[1], noise[:, n], I_ext, g_Ks, run_params)
+        k3 = run_params[1] * ode_sys(y + k2 / 2.0, I_syn_s[2], noise[:, n], I_ext, g_Ks, run_params)
+        k4 = run_params[1] * ode_sys(y + k3, I_syn_s[3], noise[:, n], I_ext, g_Ks, run_params)
 
-        y[n + 1] = y[n] + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        y_new = y + (k1 + 2 * k2 + 2 * k3 + k4) / 6
 
         # variable 7: threshold of spike recording
         a = np.full((int(run_params[0]), 1), np.nan)
         for i in range(int(run_params[0])):
-            if y[n, i, 3] < 5.0 and y[n + 1, i, 3] > 5.0:
+            if y[i, 3] < 5.0 and y_new[i, 3] > 5.0:
                 # print('8')
                 a[i, 0] = n
                 if stdp_on == 1 and n > int((run_params[3] + run_params[4]) / run_params[1]) and a[i, 0] == n and i < int(run_params[33]):
