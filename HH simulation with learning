@@ -563,7 +563,7 @@ low_inh_length = 1
 high_inh_length = 0
 
 @nb.jit(nb.types.Tuple((nb.float64[:, :], nb.float64, nb.float64[:, :], nb.float64[:], nb.float64[:],
-                            nb.float64[:, :, :, :], nb.float64[:, :, :], nb.int32, nb.float64[:, :]))(nb.float64[:, :],
+                            nb.float64[:, :, :, :], nb.float64[:, :], nb.int32, nb.float64[:, :]))(nb.float64[:, :],
                                                                                                       nb.int32,
                                                                                                       nb.int32,
                                                                                                       nb.float64[:],
