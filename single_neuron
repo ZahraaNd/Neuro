@@ -96,10 +96,10 @@ def solve_RK4(run_params):
       if y[3,n] < 5.0 and y[3,n+1] > 5.0:
           t_events[n] = 1
 
-    return t_events*run_params[0], y
+    return (np.sum(t_events)/run_params[1])*1000 , y # first is frequency in Hz, second is Vm vs time
 
 t_start = time.time()
-sol, v = solve_RK4(run_params)  # p is where dc is changed, the actual path, p2 is what is followed during the run
+f, v = solve_RK4(run_params)  # p is where dc is changed, the actual path, p2 is what is followed during the run
 t_end = time.time()
 duration = t_end - t_start
 print(f'run duration: {int(duration // 3600):02d}:{int((duration % 3600) // 60):02d}:{int(duration % 60):02d}')
