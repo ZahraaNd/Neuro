@@ -1,0 +1,108 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import random
+import numba as nb  # used to compile AMD and FCM calculations
+import time
+
+# Model Parameters
+run_dict = {
+
+    # TIME PARAMS
+    'h': 0.05,  # 0
+    'T': 100,  # 1 Remember to change it in the numerator of n_steps too, parameter nb 5!!
+    'n_steps': int(100 / 0.05),  # 2
+
+    # HH MODEL PARAMS
+    'v_exc': 0,  # 3
+    'v_inh': -75,  # 4
+
+    'C_m': 1,  # 5
+    'g_K': 3,  # 6
+    'g_Na': 24,  # 7
+    'g_L': 0.02,  # 8
+
+    'V_k': -90,  # 9
+    'V_Na': 55,  # 10
+    'V_L': -60,  # 11
+
+    # CURRENTS
+    'I_it': 2, #12
+
+    # ACH
+    'g_Ks': 0, # 13
+
+    # NOISE PARAMS
+    'noise_amp': 0,  # 14
+    'noise_freq': 0.001,  # 15 freq in 1/ms x1000 to Hz
+}
+
+run_params = np.fromiter(run_dict.values(), dtype=float)
+
+@nb.jit(nopython=True)
+def ode_sys(y, I_noise, I_ext, g_Ks, run_params):
+
+    dydt = np.zeros(4)
+    dydt[0] = (1.0 / (1 + np.exp((y[3] + 53) / 7)) - y[0]) / (0.37 + 2.78 * 1.0 / (1 + np.exp((y[3] + 40.5) / 6)))
+    dydt[1] = (1.0 / (1 + np.exp((-y[3] - 30) / 10)) - y[1]) / (0.37 + 1.85 * 1.0 / (1 + np.exp((y[3] + 27) / 15)))
+    dydt[2] = (1.0 / (1 + np.exp((-y[3] - 39) / 5)) - y[2]) / 75
+    # dVdt = (1/C_m) * ( - I_Na - I_K - I_Ks - I_leak + I_ext - I_syn  +  I_noise)
+    # dydt[3] = (1 / run_params[8]) * (- run_params[10] * math.pow(1 + math.exp((-y[3] - 30) / 9.5), -1) ** 3 * y[0] * (y[3] - run_params[13]) - run_params[9] * y[1] ** 4 * (y[3] - run_params[12]) - g_Ks * y[2] * (y[3] - run_params[12]) - run_params[11] * (y[3] - run_params[14]) + I_ext + I_noise)
+    # less expensive version
+    dydt[3] = (1 / run_params[5]) * (- run_params[7] * 1.0 / (1 + np.exp((-y[3] - 30) / 9.5)) * 1.0 / (1 + np.exp((-y[3] - 30) / 9.5)) 
+    * 1.0 / (1 + np.exp((-y[3] - 30) / 9.5)) * y[0] * (y[3] - run_params[10]) - run_params[6] * y[1] * y[1] * y[1] * y[1] * (y[3] - run_params[9]) - g_Ks * y[2] * (y[3] - run_params[9]) - run_params[8] * (y[3] - run_params[11]) + I_ext + I_noise)
+
+    return dydt
+
+@nb.jit(nopython=True)
+def solve_RK4(run_params):
+
+    I_ext = run_params[12]
+    g_Ks = run_params[13]
+
+    # always start from the same point unless specified_start is on to test for generalization
+    noise = np.zeros(int(run_params[2]))
+
+    # noise of the specified frequency for each neuron
+
+    for n in range(int(run_params[2])):
+        rand_num = random.random()
+        # Check if the neuron receives input
+        if rand_num < run_params[15]:
+            for j in range(n, (n + int(5 / run_params[0])) % run_params[2]):
+                noise[j] = run_params[14]
+
+    y = np.zeros((4, int(run_params[2])))
+    t_events = np.zeros(int(run_params[2]))
+
+    k1 = np.zeros(4)
+    k2 = np.zeros(4)
+    k3 = np.zeros(4)
+    # variable 8: initial conditions of neurons
+  
+    y[0, 0] = np.round(random.uniform(0.45, 0.9), 2)  # h0
+    y[1, 0] = np.round(random.uniform(0.3, 0.6), 2)  # n0
+    y[2, 0] = np.round(random.uniform(0.03, 0.07), 2)  # z0
+    y[3, 0] = np.round(random.uniform(-65, -80), 2)  # V0
+    
+    for n in range(int(run_params[2])):
+      k1 = run_params[0] * ode_sys(y[:,n], noise[n], I_ext, g_Ks, run_params)
+      k2 = run_params[0] * ode_sys(y[:,n] + k1 / 2.0, noise[n], I_ext, g_Ks, run_params)
+      k3 = run_params[0] * ode_sys(y[:,n] + k2 / 2.0, noise[n], I_ext, g_Ks, run_params)
+      k4 = run_params[0] * ode_sys(y[:,n] + k3, noise[n], I_ext, g_Ks, run_params)
+
+      y[:,n+1] = y[:,n] + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+      # variable 7: threshold of spike recording
+      a = np.full(1, np.nan)
+      if y[3,n] < 5.0 and y[3,n+1] > 5.0:
+          t_events[n] = 1
+
+    return t_events*run_params[0], y
+
+t_start = time.time()
+sol, v = solve_RK4(run_params)  # p is where dc is changed, the actual path, p2 is what is followed during the run
+t_end = time.time()
+duration = t_end - t_start
+print(f'run duration: {int(duration // 3600):02d}:{int((duration % 3600) // 60):02d}:{int(duration % 60):02d}')
+
+plt.plot(v[3,:])
+plt.show()
