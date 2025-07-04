@@ -1,0 +1,68 @@
+# weight param scans heatmaps (rectangular network) for E/I and activity
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Load both files
+data_ei = np.load("heatmap_results/ei_ratio_w_exc_inh_0.20.npz")
+heatmaps_ei = [data_ei[key] for key in data_ei.files]
+
+data_spikes = np.load("heatmap_results/spikes_w_exc_inh_0.20.npz")
+heatmaps_spikes = [data_spikes[key] for key in data_spikes.files]
+
+fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+
+x_vals = [2, 4, 6, 8, 10]
+y_vals = [0.2, 0.4, 0.6, 0.8, 1]
+gks = [0, 0.5, 1, 1.5]
+
+# First row: E/I ratio heatmaps (shared colorbar, to the far right)
+ei_vmax = np.nanmax([np.nanmax(h[1:, 1:]) for h in heatmaps_ei[1:]])
+ei_vmin = np.nanmin([np.nanmin(h[1:, 1:]) for h in heatmaps_ei[1:]])
+ims_ei = []
+for i, ax in enumerate(axes[0]):
+    arr = heatmaps_ei[i][1:, 1:]
+    im = ax.imshow(
+        arr, aspect='auto', origin='lower', cmap='viridis',
+        vmin=ei_vmin, vmax=ei_vmax,
+        extent=[x_vals[0], x_vals[-1], y_vals[0], y_vals[-1]]
+    )
+    ax.set_title(f"E/I ratio gks = {gks[i]}")
+    ax.set_xlabel('w_exc_exc')
+    ax.set_ylabel('w_inh_exc')
+    ax.set_xticks(x_vals)
+    ax.set_yticks(y_vals)
+    ims_ei.append(im)
+cbar_ei = fig.colorbar(
+    ims_ei[0], ax=axes[0, :], orientation='vertical',
+    fraction=0.04, pad=0.15, anchor=(8, 2)
+)
+cbar_ei.set_label('E/I ratio')
+
+# Second row: Spike count heatmaps (shared colorbar, to the far right)
+spikes_vmax = np.nanmax([np.nanmax(h[1:, 1:]) for h in heatmaps_spikes])
+spikes_vmin = np.nanmin([np.nanmin(h[1:, 1:]) for h in heatmaps_spikes])
+ims_spikes = []
+for i, ax in enumerate(axes[1]):
+    arr = heatmaps_spikes[i][1:, 1:]
+    im = ax.imshow(
+        arr, aspect='auto', origin='lower', cmap='viridis',
+        vmin=spikes_vmin, vmax=spikes_vmax,
+        extent=[x_vals[0], x_vals[-1], y_vals[0], y_vals[-1]]
+    )
+    ax.set_title(f"Spike Count gks = {gks[i]}")
+    ax.set_xlabel('w_exc_exc')
+    ax.set_ylabel('w_inh_exc')
+    ax.set_xticks(x_vals)
+    ax.set_yticks(y_vals)
+    ims_spikes.append(im)
+cbar_spikes = fig.colorbar(
+    ims_spikes[0], ax=axes[1, :], orientation='vertical',
+    fraction=0.04, pad=0.15, anchor=(8.0, 0.0)
+)
+cbar_spikes.set_label('Spike Count')
+
+plt.tight_layout()
+plt.show()
+fig.savefig("heatmap_results/summary_heatmaps_0.2.png", dpi=150, bbox_inches='tight')
+
